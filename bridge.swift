@@ -98,7 +98,6 @@ private class SessionManager {
     ///
     /// - Parameters:
     ///   - model: The system language model to use.
-    ///   - guardrails: Safety guardrails for content filtering.
     ///   - instructions: Optional system instructions for the AI.
     ///   - toolDefinitions: Array of tool definitions for function calling.
     ///   - config: Session configuration parameters.
@@ -107,7 +106,6 @@ private class SessionManager {
     /// - Throws: `AIBridgeError` if session creation fails.
     func createSession(
         model: SystemLanguageModel,
-        guardrails: LanguageModelSession.Guardrails,
         instructions: String?,
         toolDefinitions: [ClaudeToolDefinition],
         config: SessionConfig,
@@ -129,7 +127,6 @@ private class SessionManager {
 
         let session = LanguageModelSession(
             model: model,
-            guardrails: guardrails,
             tools: bridgeTools,
             instructions: instructions
         )
@@ -276,6 +273,8 @@ private struct ClaudeToolDefinition: Codable {
 
 @available(macOS 26.0, *)
 private struct BridgeTool: Tool {
+    typealias Output = GeneratedContent
+
     let name: String
     let description: String
     var parameters: GenerationSchema
@@ -313,7 +312,7 @@ private struct BridgeTool: Tool {
     /// - Parameter arguments: The tool arguments containing parameters.
     /// - Returns: Tool output containing the execution result.
     /// - Throws: `AIBridgeError` if tool execution fails.
-    func call(arguments: Arguments) async throws -> ToolOutput {
+    func call(arguments: Arguments) async throws -> GeneratedContent {
         return try await withCheckedThrowingContinuation { continuation in
             Task.detached {
                 do {
@@ -345,12 +344,12 @@ private struct BridgeTool: Tool {
                             let json = try? JSONSerialization.jsonObject(with: data)
                         {
                             let convertedContent = convertJSONToGeneratedContent(json)
-                            continuation.resume(returning: ToolOutput(convertedContent))
+                            continuation.resume(returning: convertedContent)
                         } else {
                             let content = GeneratedContent(properties: [
                                 "result": resultString as String
                             ])
-                            continuation.resume(returning: ToolOutput(content))
+                            continuation.resume(returning: content)
                         }
                     } else {
                         continuation.resume(
@@ -472,7 +471,6 @@ public func bridgeCreateSession(
         }
 
         let instructionsString = instructions.map { String(cString: $0) }
-        let guardrails: LanguageModelSession.Guardrails = .default
         let config = SessionConfig()
 
         var toolDefinitions: [ClaudeToolDefinition] = []
@@ -486,7 +484,6 @@ public func bridgeCreateSession(
 
         return try SessionManager.shared.createSession(
             model: model,
-            guardrails: guardrails,
             instructions: instructionsString,
             toolDefinitions: toolDefinitions,
             config: config,
@@ -704,9 +701,10 @@ public func bridgeGenerateResponseStream(
 
             var previousContent = ""
 
-            for try await cumulativeContent in session.streamResponse(
+            for try await snapshot in session.streamResponse(
                 to: promptString, options: options)
             {
+                let cumulativeContent = snapshot.content
                 let deltaContent = String(cumulativeContent.dropFirst(previousContent.count))
                 previousContent = cumulativeContent
 
@@ -1047,7 +1045,7 @@ private func emitError(
 private func convertTranscriptToMessages(_ transcript: Transcript) -> [ChatMessage] {
     var messages: [ChatMessage] = []
 
-    for entry in transcript.entries {
+    for entry in transcript {
         switch entry {
         case .instructions(let instructions):
             let content = extractTextFromSegments(instructions.segments)
@@ -1384,24 +1382,26 @@ private func convertJSONSchemaToDynamicSchema(_ dict: [String: Any], name: Strin
 
 @available(macOS 26.0, *)
 private func convertGeneratedContentToJSON(_ content: GeneratedContent) -> Any {
-    if let dict = try? content.properties() {
+    switch content.kind {
+    case .null:
+        return NSNull()
+    case .bool(let boolVal):
+        return boolVal
+    case .number(let doubleVal):
+        return doubleVal
+    case .string(let strVal):
+        return strVal
+    case .array(let elements):
+        return elements.map { convertGeneratedContentToJSON($0) }
+    case .structure(let properties, _):
         var result: [String: Any] = [:]
-        for (k, v) in dict {
+        for (k, v) in properties {
             result[k] = convertGeneratedContentToJSON(v)
         }
         return result
+    @unknown default:
+        return String(describing: content)
     }
-
-    if let arr = try? content.elements() {
-        return arr.map { convertGeneratedContentToJSON($0) }
-    }
-
-    if let str = try? content.value(String.self) { return str }
-    if let intVal = try? content.value(Int.self) { return intVal }
-    if let dbl = try? content.value(Double.self) { return dbl }
-    if let boolVal = try? content.value(Bool.self) { return boolVal }
-
-    return String(describing: content)
 }
 
 @available(macOS 26.0, *)
