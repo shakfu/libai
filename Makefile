@@ -72,9 +72,20 @@ STATIC_DBG_THIRD_PARTY_OBJS = $(THIRD_PARTY_SOURCES:$(THIRD_PARTY_DIR)/%.c=$(STA
 DYNAMIC_REL_THIRD_PARTY_OBJS = $(THIRD_PARTY_SOURCES:$(THIRD_PARTY_DIR)/%.c=$(DYNAMIC_REL_OBJ_DIR)/%.o)
 DYNAMIC_DBG_THIRD_PARTY_OBJS = $(THIRD_PARTY_SOURCES:$(THIRD_PARTY_DIR)/%.c=$(DYNAMIC_DBG_OBJ_DIR)/%.o)
 
-.PHONY: all clean static-rel static-dbg dynamic-rel dynamic-dbg print-version print-momo-version
+.PHONY: all clean static-rel static-dbg dynamic-rel dynamic-dbg print-version print-momo-version test
 
 all: dynamic-rel
+
+# Test target
+test: $(BUILD_DIR)/dynamic/$(ARCH)/release/test_basic
+	@echo "Running basic test..."
+	@cd $(BUILD_DIR)/dynamic/$(ARCH)/release && ./test_basic
+
+$(BUILD_DIR)/dynamic/$(ARCH)/release/test_basic: test_basic.c $(BUILD_DIR)/dynamic/$(ARCH)/release/libai.dylib $(BUILD_DIR)/dynamic/$(ARCH)/release/libaibridge.dylib | $(BUILD_DIR)/dynamic/$(ARCH)/release
+	$(CC) $(REL_CFLAGS) $(VERSION_DEFINES) \
+		-L$(BUILD_DIR)/dynamic/$(ARCH)/release -lai -laibridge \
+		-Wl,-rpath,@executable_path -o $@ $<
+	install_name_tool -change $(BUILD_DIR)/dynamic/$(ARCH)/release/libaibridge.dylib @rpath/libaibridge.dylib $@
 
 # Static release object files
 $(STATIC_REL_OBJ_DIR)/%.o: $(THIRD_PARTY_DIR)/%.c | $(STATIC_REL_OBJ_DIR)
